@@ -12,6 +12,11 @@ import json
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import FloodWait, MessageNotModified
@@ -130,7 +135,7 @@ for _uid in os.environ.get("AUTHORIZED_USERS", "").replace(";", ",").split(","):
 # ── Optional variables ──────────────────────────────────────────
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "/tmp/rclone_dl").strip()
 RCLONE_FLAGS = os.environ.get("RCLONE_FLAGS", "").strip()
-SPLIT_SIZE = int(os.environ.get("SPLIT_SIZE", str(1950 * 1024 * 1024)))
+SPLIT_SIZE = int(os.environ.get("SPLIT_SIZE", str(2000 * 1024 * 1024)))
 HEALTH_PORT = int(os.environ.get("PORT") or os.environ.get("HEALTH_PORT") or 8080)
 CONCURRENT_JOBS = max(1, min(5, int(os.environ.get("CONCURRENT_JOBS", 1))))
 BW_LIMIT = os.environ.get("BW_LIMIT", "").strip()  # e.g. "8M" or "off"
@@ -274,6 +279,39 @@ def fmt_uptime() -> str:
     h, r = divmod(u, 3600)
     m, s = divmod(r, 60)
     return f"{h}h {m}m {s}s"
+
+
+def _server_resources() -> str:
+    """Build a CPU/RAM/disk usage block for /status. Degrades gracefully."""
+    lines = []
+    if psutil is not None:
+        try:
+            # interval=None is non-blocking (returns usage since last call),
+            # so it never stalls the event loop. Primed once at startup.
+            cpu = psutil.cpu_percent(interval=None)
+            cores = psutil.cpu_count(logical=True) or 1
+            vm = psutil.virtual_memory()
+            lines.append(f"🖥 **CPU:** `{cpu:.0f}%` over `{cores}` core(s)")
+            lines.append(
+                f"🧠 **RAM:** `{fmt_size(vm.used)} / {fmt_size(vm.total)}` "
+                f"(`{vm.percent:.0f}%`)"
+            )
+        except Exception as e:
+            log.debug(f"_server_resources psutil failed: {e}")
+    else:
+        lines.append("🖥 **CPU/RAM:** `psutil not installed`")
+
+    try:
+        du = shutil.disk_usage(DOWNLOAD_DIR)
+        pct = du.used * 100 / du.total if du.total else 0
+        lines.append(
+            f"💾 **Disk:** `{fmt_size(du.used)} / {fmt_size(du.total)}` "
+            f"(`{pct:.0f}%`, free `{fmt_size(du.free)}`)"
+        )
+    except Exception as e:
+        log.debug(f"_server_resources disk failed: {e}")
+
+    return "\n".join(lines)
 
 
 def fmt_eta(seconds: float) -> str:
@@ -998,6 +1036,7 @@ async def process_one_file(
 
         try:
             prev_msg_id: int | None = None
+            all_parts_sent = True
             for part_idx, part_path in enumerate(parts, 1):
                 part_size = os.path.getsize(part_path)
                 fname_only = fname.split("/")[-1]
@@ -1028,10 +1067,25 @@ async def process_one_file(
                 )
                 if sent:
                     prev_msg_id = sent.id
+                else:
+                    all_parts_sent = False
+                    log.error(
+                        f"[{idx}/{total}] Part {part_idx}/{total_parts} returned "
+                        f"no message for {fname} — upload incomplete."
+                    )
                 with stats_lock:
                     stats["total_bytes"] += part_size
 
-            if do_delete:
+            if do_delete and not all_parts_sent:
+                progress_map[idx] = (
+                    f"✅⚠️ `[{idx}/{total}]` Done (del skipped, upload incomplete): "
+                    f"`{fname}`"
+                )
+                results["delete_failed"].append(fname)
+                log.warning(
+                    f"[{idx}/{total}] Skipping remote delete — upload incomplete: {fname}"
+                )
+            elif do_delete:
                 progress_map[idx] = f"🗑 `[{idx}/{total}]` Deleting from remote…"
                 await _push_board(status_msg, total, job_concurrent, progress_map,
                                   board_state=board_state)
@@ -1222,7 +1276,8 @@ async def cmd_start(_, msg: Message):
         "`/setbwlimit 8M|off` — limit rclone download bandwidth\n"
         "`/status` — bot stats & health\n"
         "`/logs` — last 30 log lines\n"
-        "`/cancel` — stop current job\n"
+        "`/cancel` — stop current job gracefully (finishes current files)\n"
+        "`/forcestop` — stop the running job immediately\n"
         "`/stop` — shutdown bot\n\n"
         "**Features:**\n"
         f"• ⚡ Up to **{CONCURRENT_JOBS}** files at once\n"
@@ -1275,6 +1330,9 @@ async def cmd_status(_, msg: Message):
             fw_ago = f" (last: {ah}h {am}m {as_}s ago)" if ah > 0 else (
                 f" (last: {am}m {as_}s ago)" if am > 0 else f" (last: {as_}s ago)")
         text += f"🚦 **FloodWait:** `{fw_count}x` · last wait `{fw_fmt}`{fw_ago}\n"
+    res = _server_resources()
+    if res:
+        text += f"\n──────────────\n{res}\n"
     text += f"\n🌐 **Health:** port `{HEALTH_PORT}` → `/health`"
     await msg.reply(text)
 
@@ -1312,6 +1370,25 @@ async def cmd_cancel(_, msg: Message):
     await msg.reply("🛑 Cancel requested — current files will finish then job stops.")
 
 
+@app.on_message(filters.command("forcestop") & auth_filter)
+async def cmd_forcestop(_, msg: Message):
+    if not active_sessions:
+        await msg.reply("ℹ️ No active job to stop.")
+        return
+    # Flag all active sessions as cancelled so any in-flight loops bail out.
+    for uid in list(active_sessions):
+        cancel_flags[uid] = True
+    await msg.reply(
+        "⛔ **Force-stopping now.**\n"
+        "Killing the current job immediately. Partial temp files are "
+        "removed on the next start."
+    )
+    log.warning("Force-stop via /forcestop")
+    _persist_stats()
+    await asyncio.sleep(1)
+    os._exit(0)
+
+
 @app.on_message(filters.command("stop") & auth_filter)
 async def cmd_stop(_, msg: Message):
     await msg.reply("⛔ Shutting down…")
@@ -1323,6 +1400,13 @@ async def cmd_stop(_, msg: Message):
 
 @app.on_message(filters.command("restart") & auth_filter)
 async def cmd_restart(_, msg: Message):
+    if active_sessions:
+        await msg.reply(
+            "⚠️ A job is still running — restarting now would interrupt "
+            "in-flight downloads and leave temp files behind.\n"
+            "Use `/cancel` first, then `/restart` once the job has stopped."
+        )
+        return
     await msg.reply("🔄 Restarting…")
     log.info("Restart via /restart")
     _persist_stats()
@@ -1531,6 +1615,13 @@ async def cb_mode(_, cq: CallbackQuery):
 
 # ── Entry point ───────────────────────────────────────────────
 if __name__ == "__main__":
+    if psutil is not None:
+        # Prime the CPU sampler so the first /status reports a real value
+        # instead of 0.0 (cpu_percent(interval=None) is relative to last call).
+        try:
+            psutil.cpu_percent(interval=None)
+        except Exception:
+            pass
     threading.Thread(target=_run_health, daemon=True).start()
     log.info(f"Health check on port {HEALTH_PORT}")
     log.info(f"Concurrent jobs: {CONCURRENT_JOBS}")

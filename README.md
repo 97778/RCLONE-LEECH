@@ -10,7 +10,7 @@ thumbnails, large-file splitting, and optional source cleanup.
 - 📊 Live download & upload progress with percentage, speed, and ETA
 - 🎬 Video or 📄 Document mode chosen per job
 - 🖼 Automatic video thumbnails via ffmpeg
-- ✂️ Auto-split files larger than the Telegram size limit (~1.99 GB)
+- ✂️ Auto-split files larger than the Telegram size limit (2 GB free-account limit)
 - 🗑 Optional auto-delete from the remote after a successful upload
 - 👥 Multi-user authorization
 - 🔁 `/retry` for files that failed in the last job
@@ -89,11 +89,32 @@ python bot.py
 | `/concurrent <1-5>` | Set concurrent files (next job) |
 | `/setbwlimit <8M\|off>` | Limit rclone download bandwidth |
 | `/setrefresh <2-30>` | Status board refresh interval |
-| `/status` | Bot stats & health |
+| `/status` | Bot stats, health & server CPU/RAM/disk usage |
 | `/logs` | Last 30 log lines |
-| `/cancel` | Stop the current job |
-| `/restart` | Restart the bot process |
+| `/cancel` | Stop the current job gracefully (lets current files finish) |
+| `/forcestop` | Stop the running job immediately |
+| `/restart` | Restart the bot process (refuses while a job is running) |
 | `/stop` | Shut the bot down |
+
+### Registering commands with BotFather
+
+Paste the following into BotFather via `/setcommands` to register the bot’s command menu:
+
+```text
+dl - Download & upload everything at a remote path
+retry - Re-run files that failed in the last job
+queue - Show files currently being processed
+setdelete - Toggle auto-delete from the remote (on|off)
+concurrent - Set concurrent files for next job (1-5)
+setbwlimit - Limit rclone download bandwidth (e.g. 8M|off)
+setrefresh - Status board refresh interval (2-30s)
+status - Bot stats, health & server CPU/RAM/disk usage
+logs - Show last 30 log lines
+cancel - Stop the current job gracefully
+forcestop - Stop the running job immediately
+restart - Restart the bot process
+stop - Shut the bot down
+```
 
 ## Health check
 

@@ -7,6 +7,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         unzip \
+        util-linux \
     && curl -fsSL https://rclone.org/install.sh | bash \
     && apt-get purge -y unzip \
     && apt-get autoremove -y \

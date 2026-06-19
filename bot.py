@@ -759,8 +759,14 @@ async def _send_with_retry(coro_fn, *args, max_retries: int = 5, **kwargs):
 
 
 def _render_board(total_files: int, concurrent: int, progress_map: dict) -> str:
-    header = f"📦 **{total_files} file(s)** · ⚡ **{concurrent} concurrent**\n"
-    separator = "─" * 28 + "\n"
+    glow = "✨" + "━" * 22 + "✨"
+    header = (
+        f"{glow}\n"
+        f"      🚀 **UPLOAD LIVE**\n"
+        f"{glow}\n"
+        f"📦 **{total_files} Files**   ⚡ **{concurrent} Workers**\n"
+    )
+    separator = "──────────────────────────\n"
 
     done = sum(1 for v in progress_map.values() if v.startswith("✅"))
     failed = sum(1 for v in progress_map.values() if v.startswith("❌"))
@@ -769,13 +775,15 @@ def _render_board(total_files: int, concurrent: int, progress_map: dict) -> str:
         if not (v.startswith("✅") or v.startswith("❌"))
     }
 
-    summary = f"✅ Done: {done}   ❌ Failed: {failed}\n"
+    summary = f"✅ **Done:** {done}   ❌ **Failed:** {failed}\n"
     if active_entries:
         body = "\n\n".join(active_entries[k] for k in sorted(active_entries))
     else:
         body = "_No active jobs_"
 
-    text = header + separator + summary + separator + body
+    res = _server_resources()
+    footer = f"\n{separator}{res}\n{glow}" if res else f"\n{glow}"
+    text = header + summary + separator + body + footer
     if len(text) > 4000:
         truncated = text[:4000]
         cut = truncated.rfind("\n")

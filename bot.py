@@ -1146,7 +1146,8 @@ async def process_one_file(
                 stats["last_file"] = fname
             _persist_stats()
             log.info(f"[{idx}/{total}] ✅ Done: {fname}")
-            progress_map.pop(idx, None)
+            if board_state is not None:
+                board_state.mark_dirty()
 
         except Exception as e:
             log.error(f"[{idx}/{total}] Upload failed: {fname} — {e}")

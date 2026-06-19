@@ -785,7 +785,7 @@ def _render_board(total_files: int, concurrent: int, progress_map: dict) -> str:
 
     try:
         du = shutil.disk_usage(DOWNLOAD_DIR)
-        footer_lines.append(f"├ Disk: {fmt_size(du.used)} | {fmt_size(du.total)}")
+        footer_lines.append(f"├ Disk: {fmt_size(du.free)} free | {fmt_size(du.total)}")
     except Exception as e:
         log.debug(f"_render_board disk failed: {e}")
 

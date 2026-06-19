@@ -758,16 +758,8 @@ async def _send_with_retry(coro_fn, *args, max_retries: int = 5, **kwargs):
 # ── Build the composite status board ─────────────────────────────────
 
 
-def _render_board(total_files: int, concurrent: int, progress_map: dict) -> str:
-    glow = "✨" + "━" * 22 + "✨"
-    header = (
-        f"{glow}\n"
-        f"      🚀 **UPLOAD LIVE**\n"
-        f"{glow}\n"
-        f"📦 **{total_files} Files**   ⚡ **{concurrent} Workers**\n"
-    )
-    separator = "──────────────────────────\n"
-
+def _render_board(total_files: int, concurrent: int, progress_map: dict,
+                  total_dl_speed: str = "", total_ul_speed: str = "") -> str:
     done = sum(1 for v in progress_map.values() if v.startswith("✅"))
     failed = sum(1 for v in progress_map.values() if v.startswith("❌"))
     active_entries = {
@@ -775,15 +767,36 @@ def _render_board(total_files: int, concurrent: int, progress_map: dict) -> str:
         if not (v.startswith("✅") or v.startswith("❌"))
     }
 
-    summary = f"✅ **Done:** {done}   ❌ **Failed:** {failed}\n"
     if active_entries:
         body = "\n\n".join(active_entries[k] for k in sorted(active_entries))
     else:
         body = "_No active jobs_"
 
-    res = _server_resources()
-    footer = f"\n{separator}{res}\n{glow}" if res else f"\n{glow}"
-    text = header + summary + separator + body + footer
+    sep = "━" * 28
+
+    stats_lines = [f"├ **Total:** {total_files} files  ✅ {done}  ❌ {failed}"]
+    dl = total_dl_speed or "—"
+    ul = total_ul_speed or "—"
+    stats_lines.append(f"├ **DL:** {dl}  **UL:** {ul}")
+    if psutil is not None:
+        try:
+            cpu = psutil.cpu_percent(interval=None)
+            vm = psutil.virtual_memory()
+            stats_lines.append(f"├ **CPU:** {cpu:.0f}%  **RAM:** {vm.percent:.0f}%")
+        except Exception:
+            pass
+    try:
+        du = shutil.disk_usage(DOWNLOAD_DIR)
+        stats_lines.append(f"└ **Disk:** {fmt_size(du.free)} free / {fmt_size(du.total)}")
+    except Exception:
+        pass
+    # Ensure last line uses └
+    for i, l in enumerate(stats_lines):
+        if i == len(stats_lines) - 1:
+            stats_lines[i] = l.replace("├", "└", 1)
+
+    footer = "\n".join(stats_lines)
+    text = f"{body}\n\n{sep}\n{footer}"
     if len(text) > 4000:
         truncated = text[:4000]
         cut = truncated.rfind("\n")
@@ -881,29 +894,25 @@ async def upload_part_with_progress(
         elapsed = loop.time() - upload_start[0]
         speed_bps = current / elapsed if elapsed > 0 else 0
         remaining = (total - current) / speed_bps if speed_bps > 0 else 0
-
-        speed_str = fmt_size(int(speed_bps)) + "/s" if speed_bps > 0 else ""
+        speed_str = fmt_size(int(speed_bps)) + "/s" if speed_bps > 0 else "—"
         eta_str = fmt_eta(remaining)
-
+        bar = progress_bar(current, total)
+        pct = min(100, int(current * 100 / total)) if total > 0 else 0
+        em, es = divmod(int(elapsed), 60)
         fname_disp = fname.split("/")[-1]
-        base_label = f"📤 `[{idx}/{total_files}]` `{fname_disp}`"
-        if total_parts > 1:
-            pct2 = min(100, int(current * 100 / total)) if total > 0 else 0
-            bar2 = progress_bar(current, total)
-            sz = f"{fmt_size(current)} / {fmt_size(total)}"
-            sp_eta = (f" ⚡ {speed_str}" if speed_str else "") + (
-                f"  ⏱ {eta_str}" if eta_str and eta_str != "—" else "")
-            progress_map[idx] = (
-                f"{base_label}\n"
-                f" `{bar2}` **{pct2}%** "
-                f" 🧩 Part {part_idx}/{total_parts}\n"
-                f" {sz}\n"
-                + sp_eta
-            )
-        else:
-            progress_map[idx] = make_progress_line(
-                base_label, current, total, speed_str, eta_str
-            )
+        part_line = f"├ **Part:** {part_idx}/{total_parts}\n" if total_parts > 1 else ""
+        progress_map[idx] = (
+            f"`{fname_disp}`\n\n"
+            f"💡 _Uploading..._\n"
+            f"├ `[{bar}]` » {pct}%\n"
+            f"├ **Processed:** {fmt_size(current)}\n"
+            f"├ **Total Size:** {fmt_size(total)}\n"
+            f"├ **Speed:** {speed_str}\n"
+            f"├ **ETA:** {eta_str}\n"
+            f"├ **Elapsed:** {em}m{es}s\n"
+            f"{part_line}"
+            f"└ **File:** {idx}/{total_files}"
+        )
         if board_state is not None:
             board_state.mark_dirty()
 
@@ -979,16 +988,24 @@ async def process_one_file(
         fname_display = fname.split("/")[-1]
 
         def dl_progress(done_bytes, total_bytes, pct, speed, eta):
-            progress_map[idx] = make_progress_line(
-                f"⬇️ `[{idx}/{total}]` `{fname_display}`",
-                done_bytes, total_bytes,
-                speed_str=speed,
-                eta_str=eta,
+            bar = progress_bar(done_bytes, total_bytes)
+            elapsed = int(time.monotonic() - dl_start)
+            em, es = divmod(elapsed, 60)
+            progress_map[idx] = (
+                f"`{fname_display}`\n\n"
+                f"💡 _Downloading..._\n"
+                f"├ `[{bar}]` » {pct}%\n"
+                f"├ **Processed:** {fmt_size(done_bytes)}\n"
+                f"├ **Total Size:** {fmt_size(total_bytes)}\n"
+                f"├ **Speed:** {speed}\n"
+                f"├ **ETA:** {eta}\n"
+                f"├ **Elapsed:** {em}m{es}s\n"
+                f"└ **File:** {idx}/{total}"
             )
             if board_state is not None:
                 board_state.mark_dirty()
 
-        progress_map[idx] = f"⬇️ `[{idx}/{total}]` Connecting to `{fname_display}`…"
+        progress_map[idx] = f"`{fname_display}`\n\n💡 _Connecting..._"
         await _push_board(status_msg, total, job_concurrent, progress_map,
                           board_state=board_state)
 

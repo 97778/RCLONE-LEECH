@@ -465,6 +465,25 @@ def rclone_download(
     Download a file via rclone.
     Parses rclone's --stats output and calls progress_callback with live data.
     """
+    # Split remote_path into a remote directory + filename so that
+    # `rclone copy <dir> <dest>` works correctly.  Passing a full
+    # file path (e.g. "Dropbox:Folder/file.mp4") as the source of
+    # `rclone copy` makes rclone treat it as a directory, which
+    # causes the "directory not found" error.
+    if ":" in remote_path:
+        remote_prefix, path_part = remote_path.split(":", 1)
+        _parts = path_part.rsplit("/", 1)
+        if len(_parts) == 2:
+            remote_dir = remote_prefix + ":" + _parts[0]
+            _filename = _parts[1]
+        else:
+            remote_dir = remote_prefix + ":"
+            _filename = _parts[0]
+    else:
+        _parts = remote_path.rsplit("/", 1)
+        remote_dir = _parts[0] if len(_parts) == 2 else "."
+        _filename = _parts[-1]
+
     cmd = [
         "rclone", "copy",
         "--stats=2s",
@@ -473,8 +492,9 @@ def rclone_download(
         "--buffer-size", "128M",
         "--multi-thread-streams", "4",
         "--transfers", "1",
+        "--include", _filename,
     ] + _bwlimit_args() + [
-        remote_path, dest_dir,
+        remote_dir, dest_dir,
     ]
     if RCLONE_FLAGS:
         cmd += RCLONE_FLAGS.split()

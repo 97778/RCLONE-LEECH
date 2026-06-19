@@ -450,8 +450,10 @@ def rclone_list(remote_path: str) -> list[str]:
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip() or "rclone lsf failed")
     allowed = VIDEO_EXTS | AUDIO_EXTS
+    # lsf -R returns paths relative to remote_path already,
+    # so fname is "file.mp4" or "subfolder/file.mp4" only.
     return [
-        f.strip() for f in r.stdout.splitlines()
+        f.strip().lstrip("/") for f in r.stdout.splitlines()
         if f.strip() and f.strip().rsplit(".", 1)[-1].lower() in allowed
     ]
 
@@ -1202,6 +1204,7 @@ async def _run_job(status_msg: Message, files: list[str], remote_path: str,
                 remote_path if (total == 1 and not remote_path.endswith("/"))
                 else f"{remote_path.rstrip('/')}/{fname}"
             )
+            log.info(f"[job] full_remote={full_remote!r}")
             tasks.append(asyncio.create_task(_guarded(fname, full_remote, idx)))
 
         await board_state.start(status_msg, total, job_concurrent, progress_map)

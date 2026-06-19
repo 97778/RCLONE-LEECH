@@ -465,36 +465,22 @@ def rclone_download(
     Download a file via rclone.
     Parses rclone's --stats output and calls progress_callback with live data.
     """
-    # Split remote_path into a remote directory + filename so that
-    # `rclone copy <dir> <dest>` works correctly.  Passing a full
-    # file path (e.g. "Dropbox:Folder/file.mp4") as the source of
-    # `rclone copy` makes rclone treat it as a directory, which
-    # causes the "directory not found" error.
-    if ":" in remote_path:
-        remote_prefix, path_part = remote_path.split(":", 1)
-        _parts = path_part.rsplit("/", 1)
-        if len(_parts) == 2:
-            remote_dir = remote_prefix + ":" + _parts[0]
-            _filename = _parts[1]
-        else:
-            remote_dir = remote_prefix + ":"
-            _filename = _parts[0]
-    else:
-        _parts = remote_path.rsplit("/", 1)
-        remote_dir = _parts[0] if len(_parts) == 2 else "."
-        _filename = _parts[-1]
+    # Use `rclone copyto` (file-to-file) instead of `rclone copy`
+    # (dir-to-dir) so that a full remote file path works directly
+    # without any splitting logic.
+    _filename = remote_path.split("/")[-1]
+    local_dest = os.path.join(dest_dir, _filename)
 
     cmd = [
-        "rclone", "copy",
+        "rclone", "copyto",
         "--stats=2s",
         "--stats-one-line",
         "--stats-log-level", "NOTICE",
         "--buffer-size", "128M",
         "--multi-thread-streams", "4",
         "--transfers", "1",
-        "--include", _filename,
     ] + _bwlimit_args() + [
-        remote_dir, dest_dir,
+        remote_path, local_dest,
     ]
     if RCLONE_FLAGS:
         cmd += RCLONE_FLAGS.split()
@@ -537,19 +523,11 @@ def rclone_download(
 
     proc.wait()
     if proc.returncode != 0:
-        raise RuntimeError(last_line or "rclone copy failed")
+        raise RuntimeError(last_line or "rclone copyto failed")
 
-    path_part = remote_path.split(":", 1)[-1]
-    filename = path_part.split("/")[-1]
-    local_path = os.path.join(dest_dir, filename)
-    if not os.path.exists(local_path):
-        # Fall back to whatever single file rclone actually dropped in dest_dir.
-        entries = [e for e in os.listdir(dest_dir)
-                   if os.path.isfile(os.path.join(dest_dir, e))]
-        if len(entries) == 1:
-            return os.path.join(dest_dir, entries[0])
-        raise FileNotFoundError(f"Downloaded file not found: {local_path}")
-    return local_path
+    if not os.path.exists(local_dest):
+        raise FileNotFoundError(f"Downloaded file not found: {local_dest}")
+    return local_dest
 
 
 def rclone_delete(remote_path: str) -> None:

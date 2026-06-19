@@ -910,6 +910,7 @@ async def upload_part_with_progress(
             if eta_str and eta_str != "—":
                 lines.append(f"├ ETA: {eta_str}")
             lines.append(f"├ Elapsed: {fmt_eta(elapsed)}")
+            lines.append(f"├ File: {idx}/{total_files}")
             lines[-1] = lines[-1].replace("├", "└", 1)
             progress_map[idx] = "\n".join(lines)
         else:

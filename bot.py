@@ -1201,9 +1201,15 @@ async def _run_job(status_msg: Message, files: list[str], remote_path: str,
             )
 
         for idx, fname in enumerate(files, 1):
+            # Normalise remote_path: strip trailing slash, then fix any
+            # accidental leading slash after the colon (e.g. "Dropbox3:/path")
+            _rp = remote_path.rstrip("/")
+            if ":" in _rp:
+                _rpx, _rpp = _rp.split(":", 1)
+                _rp = _rpx + ":" + _rpp.lstrip("/")
             full_remote = (
-                remote_path if (total == 1 and not remote_path.endswith("/"))
-                else f"{remote_path.rstrip('/')}/{fname}"
+                _rp if (total == 1 and not _rp.endswith("/"))
+                else f"{_rp}/{fname}"
             )
             log.info(f"[job] full_remote={full_remote!r}")
             tasks.append(asyncio.create_task(_guarded(fname, full_remote, idx)))

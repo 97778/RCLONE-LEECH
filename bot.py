@@ -1714,7 +1714,6 @@ async def cb_mode(_, cq: CallbackQuery):
 
 # ── Entry point ───────────────────────────────────────────────
 async def _main():
-    await app.start()
     if uploader is not None:
         await uploader.start()
         log.info("User-session uploader client started — uploads will use the user account")
@@ -1724,7 +1723,6 @@ async def _main():
     finally:
         if uploader is not None:
             await uploader.stop()
-        await app.stop()
 
 
 if __name__ == "__main__":
@@ -1739,4 +1737,13 @@ if __name__ == "__main__":
     log.info(f"Health check on port {HEALTH_PORT}")
     log.info(f"Concurrent jobs: {CONCURRENT_JOBS}")
     log.info("Bot starting…")
-    asyncio.run(_main())
+    # NOTE: app.run(_main()) drives everything on app's own loop (the same
+    # loop captured when `app = Client(...)` was constructed at module load
+    # time). Using asyncio.run(_main()) here instead created a *second*,
+    # different loop, and Pyrogram's internal SQLite storage executor — bound
+    # to app's original loop — then crashed with:
+    #   RuntimeError: ... attached to a different loop
+    # app.run(coroutine) starts app itself, awaits the coroutine, and stops
+    # app again on exit, so app.start()/app.stop() must NOT be called again
+    # inside _main().
+    app.run(_main())

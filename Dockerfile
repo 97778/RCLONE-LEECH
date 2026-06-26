@@ -18,7 +18,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY bot.py .
+#COPY bot.py .
+COPY . .
+
 # Health check port (override with PORT/HEALTH_PORT)
 EXPOSE 8080
 
